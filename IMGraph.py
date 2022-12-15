@@ -32,12 +32,19 @@ class IMGraph:
         self.method_seed_map = {}
         self.method_time_map = {}
         self.method_seed_idx = {}
+        self.properties = None
         self.k = max_k
         self.eps = eps
         self.l = l
         self.k_list = [i for i in range(1, max_k+1, k_step)]
         self.directed = directed
-        self.theta_tim = -1
+        
+        self.theta_tim_list = []
+        self.theta_imm_list = []
+        self.theta_sketch_list = []
+
+        self.have_run_imm = False
+        self.have_run_tim = False
         try:
             if self.file_path == "" and G_nx is not None:
                 self.G_nx = G_nx
@@ -239,8 +246,9 @@ class IMGraph:
         dir_G = self.G.copy()
         if not self.directed:
             dir_G.to_directed()
-        
-        samp_G = np.array(dir_G.get_edgelist())[np.random.uniform(0, 1, self.m*2) < self.p]
+            samp_G = np.array(dir_G.get_edgelist())[np.random.uniform(0, 1, self.m*2) < self.p]
+        else:
+            samp_G = np.array(dir_G.get_edgelist())[np.random.uniform(0, 1, self.m) < self.p]
 
         new_nodes, RRS0 = [source], [source]
         while new_nodes:
@@ -253,54 +261,66 @@ class IMGraph:
             RRS0 = RRS
         return RRS
     
-    def run_RIS(self, num_mc=None) -> None:
+    def run_RIS(self, k, R = [], num_mc=None) -> None:
         st_time = time.time()
         if num_mc is None:
-            num_mc = self.mc
-        R = [self.get_RRS() for _ in range(num_mc)]
+            eps = self.eps
+            c = 4*(1 + eps)*(1+1/k)
+            num_mc = int(np.ceil(c*self.m*k*np.log(self.n) / np.power(eps, 2)))
+        cur_len = len(R)
         print("Number of MC simulations for RIS:", num_mc)
-        SEED, timelapse = [], []
-
-        for _ in range(self.k):
-            flat_list = [item for sublist in R for item in sublist]
-            if len(flat_list) == 0:
-                break
-            
-            # print(Counter(flat_list).most_common())
-            seed = Counter(flat_list).most_common()[0][0]
-            SEED.append(seed)
-            R = [rrs for rrs in R if seed not in rrs]
-            timelapse.append(time.time() - st_time)
-        for _ in range(self.k - len(SEED)):
-            SEED.append(choice(list(set(range(self.n)) - set(SEED))))
-            timelapse.append(time.time() - st_time)
-        # self.method_spread_map["RIS"] = SPREAD
-        self.method_time_map["RIS"] = timelapse
-        self.method_seed_idx["RIS"] = SEED
-        self.method_seed_map["RIS"] = [self.G.vs[idx]["_nx_name"] for idx in SEED]
-        return
-    def run_TIM(self):
-        n, k, eps, l = self.n, self.k, self.eps, self.l
+        for _ in range(cur_len, num_mc):
+            R.append(self.get_RRS())
         
-        st_time = time.time()
-        kpt = self.kpt_estimation()
-        lam = (8+2*self.eps)*self.n*(l*np.log(n) + np.log(comb(n, k)) + np.log(2))*np.power(eps, -2)
-        theta = int(np.ceil(lam / kpt))
-        self.theta_tim = theta
-        print("Number of RR sets for TIM", theta)
-        R = [self.get_RRS() for _ in range(theta)]
-        SEED, timelapse = [], []
-
-        for _ in range(self.k):
-            flat_list = [item for sublist in R for item in sublist]
-            seed = Counter(flat_list).most_common()[0][0]
-            SEED.append(seed)
-            R = [rrs for rrs in R if seed not in rrs]
-            timelapse.append(time.time() - st_time)
-        self.method_time_map["TIM"] = timelapse
-        self.method_seed_idx["TIM"] = SEED
-        self.method_seed_map["TIM"] = [self.G.vs[idx]["_nx_name"] for idx in SEED]
+        SEED = self.node_selection(R, k)
+        return SEED, R
     
+    def run_RIS_for_all_k(self):
+        SEED = None
+        timelapse = []
+        all_R = []
+        st = time.time()
+        for _k in range(1, self.k + 1):
+            SEED, all_R = self.run_RIS(_k, R=all_R)
+            timelapse.append(time.time() - st)
+        if SEED != None and len(SEED) == self.k:
+            self.method_seed_idx["RIS"] = SEED
+            self.method_seed_map["RIS"] = [self.G.vs[idx]["_nx_name"] for idx in SEED]    
+            self.method_time_map["RIS"] = timelapse
+        self.have_run_tim = True
+        return
+
+    def run_TIM(self, k, R=[]):
+        n, eps, l = self.n, self.eps, self.l
+        
+        kpt = self.kpt_estimation(k)
+        lam = (8+2*self.eps)*self.n*(l*np.log(n) + log_n_k(n, k) + np.log(2))*np.power(eps, -2)
+        theta = int(np.ceil(lam / kpt))
+        
+        self.theta_tim_list.append(theta)
+        print("Number of RR sets for TIM", theta)
+        cur_len = len(R)
+        for _ in range(cur_len, theta):
+            R.append(self.get_RRS())
+        SEED, frac = self.node_selection(R, k)
+        return SEED, R
+
+    
+    def run_TIM_for_all_k(self):
+        SEED = None
+        timelapse = []
+        all_R = []
+        st = time.time()
+        for _k in range(1, self.k + 1):
+            SEED, all_R = self.run_TIM(_k, R=all_R)
+            timelapse.append(time.time() - st)
+        if SEED != None and len(SEED) == self.k:
+            self.method_seed_idx["TIM"] = SEED
+            self.method_seed_map["TIM"] = [self.G.vs[idx]["_nx_name"] for idx in SEED]    
+            self.method_time_map["TIM"] = timelapse
+        self.have_run_tim = True
+        return
+
     def get_w(self, R):
         res = 0
         for node in R:
@@ -308,17 +328,17 @@ class IMGraph:
         return res
             
 
-    def kpt_estimation(self):
+    def kpt_estimation(self, k):
         for i in range(1, int(np.ceil(np.log2(self.n)-1))):
             ci = (6*self.l*np.log(self.n) + 6*np.log(np.log2(self.n))) * np.power(2, i)
             _sum = 0
             for j in range(1, int(np.ceil(ci))):
                 R = self.get_RRS()
-                kappa = 1 - np.power(1 - self.get_w(R)/self.m, self.k)
+                kappa = 1 - np.power(1 - self.get_w(R)/self.m, k)
                 _sum += kappa
             if _sum / ci > 1 / np.power(2, i):
                 return self.n*_sum/(2*ci)
-            return 1
+        return 1
 
     
     def estimate_spread(self, method:str) -> None:
@@ -337,6 +357,110 @@ class IMGraph:
         self.estimate_spread("RIS")
         return
 
+
+    def node_selection(self, R_sets, k):
+        res = []
+        R = deepcopy(R_sets)
+        origin_len = len(R)
+        for _ in range(k):
+            flat_list = [item for sublist in R for item in sublist]
+            if len(flat_list) == 0:
+                break
+            seed = Counter(flat_list).most_common()[0][0]
+            res.append(seed)
+            R = [rrs for rrs in R if seed not in rrs]
+        frac = 1 - len(R)/origin_len
+        for _ in range(self.k - len(res)):
+            res.append(choice(list(set(range(self.n)) - set(res))))
+        
+        frac = 1 - len(R)/origin_len
+        return res, frac
+
+    def run_IMM(self, k):
+        n, eps, l = self.n, self.eps, self.l
+        alpha = np.sqrt(l*np.log(n) + np.log(2))
+        beta = np.sqrt((1 - np.exp(-1)) * (log_n_k(n, k) + np.log(n) + np.log(2)))
+        lambda_star = 2*n*np.power((1 - np.exp(-1))*alpha + beta, 2) / np.power(eps, 2)
+        LB = 1
+        eps_prime = np.sqrt(2)*eps
+        lam_prime = (2 + 2*eps_prime / 3) * (log_n_k(n, k) + l*np.log(n) + np.log(np.log2(n))) * n / np.power(eps_prime, 2)
+
+        all_R = []
+
+        for i in range(1, int(np.ceil(np.log2(self.n)-1))):
+            x = n/np.power(2, i)
+            theta_i = lam_prime / x
+            for j in range(0, int(np.ceil(theta_i))):
+                all_R.append(self.get_RRS())
+            S_i, frac = self.node_selection(all_R, k)
+            if n*frac >= (1-eps_prime) * x:
+                LB = n*frac / (1 + eps_prime)
+                break
+        theta = int(np.ceil(lambda_star / LB))
+        
+        self.theta_imm_list.append(theta)
+        print(f"The number of RR sets in IMM, for k={k}:", theta)
+        for i in range(1, theta):
+            all_R.append(self.get_RRS())
+        SEED, fraction = self.node_selection(all_R, k)
+        
+        return SEED
+
+    def run_IMM_for_all_k(self):
+        SEED = None
+        timelapse = []
+        st = time.time()
+        for _k in range(1, self.k + 1):
+            SEED = self.run_IMM(_k)
+            timelapse.append(time.time() - st)
+        if SEED != None and len(SEED) == self.k:
+            self.method_seed_idx["IMM"] = SEED
+            self.method_seed_map["IMM"] = [self.G.vs[idx]["_nx_name"] for idx in SEED]    
+            self.method_time_map["IMM"] = timelapse
+        self.have_run_imm = True
+        return
+
+    def run_sketch(self, k):
+        if self.have_run_imm == False and self.have_run_tim == False:
+            print("Please run TIM or IMM first.")
+            return None
+        n = self.n
+        delta_pp = 1
+        eps = .4
+        if self.have_run_imm and self.have_run_tim:
+            min_theta = min(self.theta_imm_list[k-1], self.theta_tim_list[k-1])
+        else:
+            min_theta = self.theta_imm_list[k-1] if self.have_run_imm else self.theta_tim_list[k-1]
+        loglog_theta = np.log(np.log(min_theta) / np.log(1/(1-eps)))
+        delta = delta_pp + loglog_theta
+        
+        theta_try = int(np.ceil(12*(delta + k*np.log(n)) / eps**2))
+        if theta_try > min_theta:
+            print(f"The proposed algorithm is not effective, k={k}.")
+            theta_try = min_theta
+        else:
+            print(f"The algorithm is effective, k={k}. Number of RR sets={theta_try}.")
+
+        self.theta_sketch_list.append(theta_try)
+        
+        R = [self.get_RRS() for _ in range(theta_try)]
+        SEED, frac = self.node_selection(R, k)
+        return SEED
+
+    def run_sketch_for_all_k(self):
+        SEED = None
+        timelapse = []
+        st = time.time()
+        for _k in range(1, self.k + 1):
+            SEED = self.run_sketch(_k)
+            timelapse.append(time.time() - st)
+        if SEED != None and len(SEED) == self.k:
+            self.method_seed_idx["my_method"] = SEED
+            self.method_seed_map["my_method"] = [self.G.vs[idx]["_nx_name"] for idx in SEED]    
+            self.method_time_map["my_method"] = timelapse
+        return
+
+
     # def run_sketch(self) -> None:
     #     if self.theta_tim == -1:
     #         print("Please run TIM first to determine the number of RR sets.")
@@ -344,11 +468,16 @@ class IMGraph:
         
     #     return
 
-    def get_properties(self) -> dict:
-        giant_comp = self.G_nx.subgraph(sorted(nx.connected_components(self.G_nx), key=len, reverse=True)[0])
-        return {
+    def get_properties(self) -> None:
+        if self.directed:
+            tmp_undirected = nx.to_undirected(self.G_nx)
+            giant_comp = tmp_undirected.subgraph(sorted(nx.connected_components(tmp_undirected), key=len, reverse=True)[0])
+        else:
+            giant_comp = self.G_nx.subgraph(sorted(nx.connected_components(self.G_nx), key=len, reverse=True)[0])
+        self.properties = {
             "density": nx.density(giant_comp),
             "diameter": nx.diameter(giant_comp),
             "avg_shortest_path_length": nx.average_shortest_path_length(giant_comp),
             "clustering_coefficient": nx.average_clustering(giant_comp),
         }
+        return

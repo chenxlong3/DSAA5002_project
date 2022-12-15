@@ -1,4 +1,5 @@
 import networkx as nx
+import numpy as np
 import pickle
 proxy_metrics = ["pagerank", "outdegree", "betweenness"]
 
@@ -41,4 +42,10 @@ def save_instance(obj, file_path):
 def load_instance(file_path):
     with open(file_path, "rb") as f:
         res = pickle.load(f)
+    return res
+
+def log_n_k(n, k):
+    res = 0
+    for i in range(1, k+1):
+        res += np.log((n - i + 1) / i)
     return res

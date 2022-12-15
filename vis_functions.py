@@ -8,7 +8,9 @@ method_marker = {
     "greedy": "+",
     "CELF": "s",
     "RIS": "D",
-    "TIM": "p"
+    "TIM": "p",
+    "IMM": "h",
+    "my_method": "P"
 }
 font = {'family': 'serif',
         'weight': 'normal',
