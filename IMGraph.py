@@ -420,13 +420,13 @@ class IMGraph:
         self.have_run_imm = True
         return
 
-    def run_sketch(self, k):
+    def run_sketch(self, k, epsilon=0.4):
         if self.have_run_imm == False and self.have_run_tim == False:
             print("Please run TIM or IMM first.")
             return None
         n = self.n
         delta_pp = 1
-        eps = .4
+        eps = epsilon
         if self.have_run_imm and self.have_run_tim:
             min_theta = min(self.theta_imm_list[k-1], self.theta_tim_list[k-1])
         else:
@@ -461,12 +461,6 @@ class IMGraph:
         return
 
 
-    # def run_sketch(self) -> None:
-    #     if self.theta_tim == -1:
-    #         print("Please run TIM first to determine the number of RR sets.")
-    #         return
-        
-    #     return
 
     def get_properties(self) -> None:
         if self.directed:
